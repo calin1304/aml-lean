@@ -1,16 +1,24 @@
 namespace AML
-  structure svar := mk :: (name : string)
-  structure evar := mk :: (name : string)
+  -- Encoding variables with De Brujin indices
+  structure evar := mk :: (dbi : ℕ) /-^ Element variables-/
+  structure svar := mk :: (dbi : ℕ) /-^ Set variables -/
 
-  structure box := mk
+  structure box := mk /-^ Box placeholder for application contexts -/
 
+  /-- AML has two types of variables: element variables and set variables.
+    - TODO: Expand comment
+    -/
   inductive var_type
     | evar : evar -> var_type
     | svar : svar -> var_type
     | box : var_type
 
+  /-- AML formulas, which we call patterns because of the pattern matching semantics.
+    -/
   inductive pattern : Type
-    | var   : var_type -> pattern
+    | var   : var_type -> pattern 
+    | evar : evar -> pattern
+    | svar : svar -> pattern
     | sym   : string -> pattern
     | app   : pattern -> pattern -> pattern
     | bot   : pattern
@@ -19,14 +27,6 @@ namespace AML
     | mu    : svar -> pattern -> pattern
 
   open pattern 
-
-  instance evar_to_pattern : has_coe evar pattern := ⟨λ v, var (var_type.evar v)⟩
-  instance svar_to_pattern : has_coe svar pattern := ⟨λ v, var (var_type.svar v)⟩
-
-  instance evar_to_var_type : has_coe evar var_type := ⟨var_type.evar⟩
-  instance svar_to_var_type : has_coe svar var_type := ⟨var_type.svar⟩
-
-  instance var_type_to_pattern : has_coe var_type pattern := ⟨var⟩
 
   notation `⊥` := bot
   notation p `->` q := impl p q
@@ -51,43 +51,57 @@ namespace AML
   notation `.∀` x `:` p := all x p
 
   def nu (X : svar) (p : pattern) : pattern := sorry
+
+  namespace AML.instances
+    instance evar_to_pattern : has_coe evar pattern := ⟨λ v, var (var_type.evar v)⟩
+    instance svar_to_pattern : has_coe svar pattern := ⟨λ v, var (var_type.svar v)⟩
+
+    instance evar_to_var_type : has_coe evar var_type := ⟨var_type.evar⟩
+    instance svar_to_var_type : has_coe svar var_type := ⟨var_type.svar⟩
+
+    instance var_type_to_pattern : has_coe var_type pattern := ⟨var⟩
+
+    instance evar.decidable_eq : decidable_eq evar := 
+      λ ⟨s₁⟩ ⟨s₂⟩,
+          match string.has_decidable_eq s₁ s₂ with
+            | is_true p := is_true (congr_arg evar.mk p)
+            | is_false p := is_false (λ q, p (evar.mk.inj q))
+          end
+    instance svar.decidable_eq : decidable_eq svar := 
+      λ ⟨s₁⟩ ⟨s₂⟩,
+          match string.has_decidable_eq s₁ s₂ with
+            | is_true p := is_true (congr_arg svar.mk p)
+            | is_false p := is_false (λ q, p (svar.mk.inj q))
+          end
+
+    instance var_type.decidable_eq : decidable_eq var_type
+      | (var_type.evar v₁) (var_type.evar v₂) := 
+          match evar.decidable_eq v₁ v₂ with
+            | is_true p := is_true (congr_arg var_type.evar p)
+            | is_false p := is_false (λ q, p (var_type.evar.inj q))
+          end
+      | (var_type.svar v₁) (var_type.svar v₂) :=
+          match svar.decidable_eq v₁ v₂ with
+            | is_true p := is_true (congr_arg var_type.svar p)
+            | is_false p := is_false (λ q, p (var_type.svar.inj q))
+          end
+      | var_type.box var_type.box := is_true rfl
+      | _ _ := is_false (λ h, sorry)
+  end AML.instances
   
-  instance evar.decidable_eq : decidable_eq evar := 
-    λ ⟨s₁⟩ ⟨s₂⟩,
-        match string.has_decidable_eq s₁ s₂ with
-          | is_true p := is_true (congr_arg evar.mk p)
-          | is_false p := is_false (λ q, p (evar.mk.inj q))
-        end
-  instance svar.decidable_eq : decidable_eq svar := 
-    λ ⟨s₁⟩ ⟨s₂⟩,
-        match string.has_decidable_eq s₁ s₂ with
-          | is_true p := is_true (congr_arg svar.mk p)
-          | is_false p := is_false (λ q, p (svar.mk.inj q))
-        end
-
-  instance var_type.decidable_eq : decidable_eq var_type
-    | (var_type.evar v₁) (var_type.evar v₂) := 
-        match evar.decidable_eq v₁ v₂ with
-          | is_true p := is_true (congr_arg var_type.evar p)
-          | is_false p := is_false (λ q, p (var_type.evar.inj q))
-        end
-    | (var_type.svar v₁) (var_type.svar v₂) :=
-        match svar.decidable_eq v₁ v₂ with
-          | is_true p := is_true (congr_arg var_type.svar p)
-          | is_false p := is_false (λ q, p (var_type.svar.inj q))
-        end
-    | var_type.box var_type.box := is_true rfl
-    | _ _ := is_false (λ h, sorry)
-
-  def FV : pattern -> set var_type
+  /-- The set of all free variables in a pattern -/
+  def pattern.FV : pattern -> set var_type
     | (var v) := {v}
     | (sym _) := ∅
-    | (app s arg) := (FV s) ∪ (FV arg)
+    | (app s arg) := s.FV ∪ arg.FV
     | bot := ∅
-    | (impl p q) := (FV p) ∪ (FV q)
-    | (exist x p) := FV p \ {x}
-    | (mu X p) := FV p \ {X}
+    | (impl p q) := p.FV ∪ q.FV
+    | (exist x p) := p.FV \ {x}
+    | (mu X p) := p.FV \ {X}
 
+  /-- Substitute variable `x` with pattern `y` in given pattern.
+    - TODO: Fix this
+    -/
   def pattern.subst (y : pattern) (x : var_type) : pattern -> pattern
     | (var v) := if v = x then y else var x
     | (sym s) := sym s
@@ -97,19 +111,26 @@ namespace AML
     | (exist z p) := 
         if ↑z = x
           then exist z p
-          else if ↑z ∈ FV y then sorry else exist z (pattern.subst p)
+          else if ↑z ∈ y.FV then sorry else exist z (pattern.subst p)
     | (mu X p) := sorry
 
-  notation p `[` x `<-` y `]` := pattern.subst y x p
+  notation p `[` y `//` x `]` := pattern.subst y x p
 
-  example :
-    let p := (sym "+"), x : evar := ⟨"x"⟩, y : evar := ⟨"y"⟩
-     in p[x <- y] = p := rfl
-  example :
-    let p : evar := ⟨"x"⟩, x : evar := ⟨"x"⟩, y : evar := ⟨"y"⟩
-     in p[x <- y] = y := rfl
+  section
+    example :
+      let p := (sym "+"), x : evar := ⟨"x"⟩, y : evar := ⟨"y"⟩
+      in p[x <- y] = p := rfl
+    example :
+      let p : evar := ⟨"x"⟩, x : evar := ⟨"x"⟩, y : evar := ⟨"y"⟩
+      in p[x <- y] = y := rfl
+  end
 
-  def bound (x : var_type) (p : pattern) : Prop := ¬ (x ∈ FV p)
+  def pattern.hasBound (x : var_type) (p : pattern) : Prop := ¬ (x ∈ p.FV)
+
+  /-- This should apply to μX.φ where X has to be positive in φ. It should not be nested
+    - an odd number of times on the left of an implication φ₁ -> φ₂.
+    -/
+  def positive (X : svar) (φ : pattern) : Prop := sorry
 end AML
 
 namespace AML.AppCtx
@@ -143,39 +164,105 @@ namespace AML.AppCtx
   notation C `[` p `]` := C.subst p
 
   def nestedAppCtx : appCtx -> Prop := sorry
+
+  def appCtx.hasBound (x : var_type) (C : appCtx) : Prop := sorry
 end AML.AppCtx
 
 namespace AML.Proof
   open AML
   open AML.pattern
-  open AML.AppCtx 
+  open AML.AppCtx
+
+  variables {p q r : pattern}
+  variables { x y : evar }
+  variables {C C₁ C₂ : appCtx}
 
   inductive thm : pattern -> Type*
-    -- PL
-    | a1 {p q : pattern} : thm (p -> (q -> p))
-    | a2 {p q r : pattern} : thm ((p -> (q -> r)) -> ((p -> q) -> (p -> r)))
-    | a3 {p q : pattern} : thm ((¬p -> ¬q) -> (q -> p))
-    | mp {p q : pattern} (hp : thm p) (hpq : thm (p -> q)) : thm q
+    -- Propositional logic
+    | a1 : thm (p -> (q -> p))
+    | a2 : thm ((p -> (q -> r)) -> ((p -> q) -> (p -> r)))
+    | a3 : thm ((¬p -> ¬q) -> (q -> p))
+    | mp : thm p -> thm (p -> q) -> thm q
     -- FOL
-    | varsubst {x y : evar} {p : pattern} : thm ((.∀x: p) -> p [x <- y])
-    | all {x : evar} {p q: pattern} : bound x p -> thm ((.∀x: (p -> q)) -> (p -> .∀x: q))
-    | gen {x : evar} {p : pattern} (hp : thm p) : thm (.∀x: p)
+    | ex_quan : thm (p[y//x] -> (∃x:p))
+    | ex_gen : q.hasBound x -> thm (p -> q) -> thm (∃x:p -> q)
     -- Frame reasoning
-    | propg_bot {C : appCtx} : thm (C[⊥] -> ⊥)
-    | propg_disj {C : appCtx} {p q : pattern} : thm (C[p ∨ q] -> C[p] ∨ C[q])
-    | propg_exist {C : appCtx} {x : evar} {p : pattern}
-        : bound x (C[∃x : p]) -> thm (C[∃x: p] -> ∃x : (C[p]))
-    | framing {C : appCtx} {p q : pattern} (h : thm (p -> q)) : thm (C[p] -> C[q])
-    -- 
-    | existence {x : evar} : thm (∃x : x)
-    | singleton {x : evar} {p : pattern} { C₁ C₂ : appCtx }
-        : nestedAppCtx C₁ -> nestedAppCtx C₂ -> thm ¬(C₁[x ∧ p] ∧ C₂[x ∧ ¬ p])
+    | propg_bot : thm (C[⊥] -> ⊥)
+    | propg_disj : thm (C[p ∨ q] -> C[p] ∨ C[q])
+    | propg_exist : C.hasBound x -> thm (C[∃x: p] -> ∃x : (C[p]))
+    | framing : thm (p -> q) -> thm (C[p] -> C[q])
+    -- Technical rules
+    | existence : thm (∃x:x)
+    | singleton : nestedAppCtx C₁ -> nestedAppCtx C₂ -> thm ¬(C₁[x ∧ p] ∧ C₂[x ∧ ¬ p])
     -- TODO: set variable subst
+    -- TODO: pre-fixpoint
     -- TODO: knaster-tarksi
 
   notation `⊢` p := thm p
 
 end AML.Proof
+
+namespace AML.Semantics
+  notation `𝒫` t := set t
+
+  variable symbol : Type
+
+  /-- A model that a specific pattern is evaluated in.
+    -/
+  structure model :=
+    (domain : Type)
+    (application : domain -> domain -> 𝒫 domain)
+    /-^ Interpretation of symbol application -/
+    (symbol_interp : symbol -> set domain)
+    /-^ Interpretation of symbol -/
+
+  variable {α : Type}
+  variable {M : model α}
+
+  def theory := set AML.pattern
+
+  def full : 𝒫 M.domain := sorry
+  def empty : 𝒫 M.domain := ∅
+  
+  /- Since pattern evaluation is not two-valued, we can take ∅ to represent false and
+   - the full domain to represent truth.
+   -/
+  notation `⊤` := full
+  notation `⊥` := empty
+
+  /-- The pointwisely extension over sets of symbol application over elements. -/
+  def set_app : 𝒫 M.domain -> 𝒫 M.domain -> 𝒫 M.domain := sorry
+
+  /-- Evaluation of element variables, ranging over specific elements in the domain -/
+  def evar_eval : AML.evar -> M.domain := sorry
+
+  /-- Evaluation of set variables, ranging over subsets of the domain. -/
+  def svar_eval : AML.svar -> 𝒫 M.domain := sorry
+
+  /-- Extending valuations to patterns -/
+  def pattern_eval : AML.pattern -> 𝒫 M.domain
+    | (AML.pattern.evar v) := {evar_eval v}
+    | (AML.pattern.svar v) := svar_eval v
+    | AML.pattern.bot := ∅
+    | (AML.pattern.sym s) := sorry
+    | (AML.pattern.app f arg) := sorry
+    | (AML.pattern.impl p q) := sorry
+    | (AML.pattern.exist x p) := sorry
+    | (AML.pattern.mu X p) := sorry
+
+  /-- A pattern is a predicate if it evaluates to ⊤ or ⊥. -/
+  def predicate (φ : AML.pattern) : Prop := pattern_eval φ = ⊤ ∨ pattern_eval φ = ⊥
+
+  /-- A model satisfies a given pattern if the pattern evaluates to ⊤ in that model. -/
+  def satisfies_pattern (M : model α) (φ : AML.pattern) : Prop := pattern_eval φ = ⊤
+  notation M `⊧` φ := satisfies_pattern M φ
+
+  /-- A model satisfies a set of patterns, called a theory, if all patterns evaluate
+    - to ⊤ in that model.
+    -/
+  def satisfies_theory (M : model α) (Γ : theory) : Prop := sorry
+  notation M `⊧` Γ := satisfies_theory M Γ
+end AML.Semantics
 
 namespace AML.Theory
   open AML
